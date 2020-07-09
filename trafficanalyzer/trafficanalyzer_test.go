@@ -2,6 +2,7 @@ package trafficanalyzer
 
 import (
 	"github.com/google/go-cmp/cmp"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1014,10 +1015,79 @@ func Test_computeServiceWithTargetPods(t *testing.T) {
 	}
 }
 
+func Test_computeReplicaSetWithTargetPods(t *testing.T) {
+	type args struct {
+		replicaSet *appsv1.ReplicaSet
+		pods       []*corev1.Pod
+	}
+	tests := []struct {
+		name                             string
+		args                             args
+		expectedReplicaSetWithTargetPods types.ReplicaSet
+	}{
+		{
+			name: "replicaSet name and namespace are propagated",
+			args: args{
+				replicaSet: replicaSetBuilder().name("rs").namespace("ns").build(),
+				pods:       []*corev1.Pod{},
+			},
+			expectedReplicaSetWithTargetPods: types.ReplicaSet{
+				Name:       "rs",
+				Namespace:  "ns",
+				TargetPods: []types.Pod{},
+			},
+		},
+		{
+			name: "only pods owned by replicaSet are detected as target",
+			args: args{
+				replicaSet: replicaSetBuilder().name("rs").build(),
+				pods: []*corev1.Pod{
+					podBuilder().name("p1").ownerReference("rs").build(),
+					podBuilder().name("p2").ownerReference("other").build(),
+					podBuilder().name("p3").build(),
+				},
+			},
+			expectedReplicaSetWithTargetPods: types.ReplicaSet{
+				Namespace: "default",
+				Name:      "rs",
+				TargetPods: []types.Pod{
+					{Namespace: "default", Name: "p1", Labels: map[string]string{}},
+				},
+			},
+		},
+		{
+			name: "only pods within the same namespace are detected as target",
+			args: args{
+				replicaSet: replicaSetBuilder().name("rs").namespace("ns").build(),
+				pods: []*corev1.Pod{
+					podBuilder().namespace("ns").ownerReference("rs").build(),
+					podBuilder().namespace("other").ownerReference("rs").build(),
+				},
+			},
+			expectedReplicaSetWithTargetPods: types.ReplicaSet{
+				Namespace: "ns",
+				Name:      "rs",
+				TargetPods: []types.Pod{
+					{Namespace: "ns", Labels: map[string]string{}},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			replicaSetWithTargetPods := computeReplicaSetWithTargetPods(tt.args.replicaSet, tt.args.pods)
+			if diff := cmp.Diff(tt.expectedReplicaSetWithTargetPods, replicaSetWithTargetPods); diff != "" {
+				t.Errorf("computeReplicaSetWithTargetPods() result mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 type PodBuilder struct {
-	Name      string
-	Namespace string
-	Labels    map[string]string
+	Name           string
+	Namespace      string
+	Labels         map[string]string
+	OwnerReference string
 }
 
 func podBuilder() *PodBuilder {
@@ -1042,12 +1112,23 @@ func (podBuilder *PodBuilder) label(key string, value string) *PodBuilder {
 	return podBuilder
 }
 
+func (podBuilder *PodBuilder) ownerReference(ownerReferenceName string) *PodBuilder {
+	podBuilder.OwnerReference = ownerReferenceName
+	return podBuilder
+}
+
 func (podBuilder *PodBuilder) build() *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      podBuilder.Name,
 			Namespace: podBuilder.Namespace,
 			Labels:    podBuilder.Labels,
+			OwnerReferences: []v1.OwnerReference{
+				{
+					Kind: "ReplicaSet",
+					Name: podBuilder.OwnerReference,
+				},
+			},
 		},
 	}
 }
@@ -1203,6 +1284,36 @@ func (serviceBuilder *ServiceBuilder) build() *corev1.Service {
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: serviceBuilder.Selector,
+		},
+	}
+}
+
+type ReplicaSetBuilder struct {
+	Name      string
+	Namespace string
+}
+
+func replicaSetBuilder() *ReplicaSetBuilder {
+	return &ReplicaSetBuilder{
+		Namespace: "default",
+	}
+}
+
+func (replicaSetBuilder *ReplicaSetBuilder) name(name string) *ReplicaSetBuilder {
+	replicaSetBuilder.Name = name
+	return replicaSetBuilder
+}
+
+func (replicaSetBuilder *ReplicaSetBuilder) namespace(namespace string) *ReplicaSetBuilder {
+	replicaSetBuilder.Namespace = namespace
+	return replicaSetBuilder
+}
+
+func (replicaSetBuilder *ReplicaSetBuilder) build() *appsv1.ReplicaSet {
+	return &appsv1.ReplicaSet{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      replicaSetBuilder.Name,
+			Namespace: replicaSetBuilder.Namespace,
 		},
 	}
 }

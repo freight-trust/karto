@@ -21,6 +21,7 @@ func newHandler() *handler {
 			Pods:          make([]types.PodWithIsolation, 0),
 			AllowedRoutes: make([]types.AllowedRoute, 0),
 			Services:      make([]types.Service, 0),
+			ReplicaSets:   make([]types.ReplicaSet, 0),
 		},
 	}
 	return handler

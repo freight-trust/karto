@@ -1,6 +1,7 @@
 package trafficanalyzer
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -224,6 +225,22 @@ func computeServiceWithTargetPods(service *corev1.Service, pods []*corev1.Pod) t
 	}
 }
 
+func computeReplicaSetWithTargetPods(replicaSet *appsv1.ReplicaSet, pods []*corev1.Pod) types.ReplicaSet {
+	targetPods := make([]types.Pod, 0)
+	for _, pod := range pods {
+		namespaceMatches := replicaSetNamespaceMatches(pod, replicaSet)
+		isPodOwnedByReplicaSet := isPodOwnedByReplicaSet(pod, replicaSet)
+		if namespaceMatches && isPodOwnedByReplicaSet {
+			targetPods = append(targetPods, fromK8sPod(pod))
+		}
+	}
+	return types.ReplicaSet{
+		Name:       replicaSet.Name,
+		Namespace:  replicaSet.Namespace,
+		TargetPods: targetPods,
+	}
+}
+
 func ingressPoliciesByPort(sourcePod *corev1.Pod, targetPodIsolation podIsolation, namespaces []*corev1.Namespace) map[int32][]*networkingv1.NetworkPolicy {
 	policiesByPort := make(map[int32][]*networkingv1.NetworkPolicy)
 	if !targetPodIsolation.IsIngressIsolated() {
@@ -374,6 +391,10 @@ func serviceNamespaceMatches(pod *corev1.Pod, service *corev1.Service) bool {
 	return pod.Namespace == service.Namespace
 }
 
+func replicaSetNamespaceMatches(pod *corev1.Pod, replicaSet *appsv1.ReplicaSet) bool {
+	return pod.Namespace == replicaSet.Namespace
+}
+
 func selectorMatches(objectLabels map[string]string, labelSelector metav1.LabelSelector) bool {
 	selector, err := metav1.LabelSelectorAsSelector(&labelSelector)
 	if err != nil {
@@ -388,6 +409,15 @@ func labelsMatches(objectLabels map[string]string, matchLabels map[string]string
 		return false
 	}
 	return selectorMatches(objectLabels, *metav1.SetAsLabelSelector(matchLabels))
+}
+
+func isPodOwnedByReplicaSet(pod *corev1.Pod, replicaSet *appsv1.ReplicaSet) bool {
+	for _, ownerReference := range pod.OwnerReferences {
+		if ownerReference.Kind == "ReplicaSet" && ownerReference.Name == replicaSet.Name {
+			return true
+		}
+	}
+	return false
 }
 
 func fromK8sPodIsolation(podIsolation podIsolation) types.PodWithIsolation {
